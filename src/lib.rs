@@ -1,6 +1,11 @@
 use std::{env, fmt, mem, os::fd::OwnedFd};
 
 /// Fetch any sockets provided by systemd, and their names if specified
+///
+/// See [sd_listen_fds](https://www.freedesktop.org/software/systemd/man/sd_listen_fds.html).
+///
+/// Succeeds with an empty `Vec` if no socket was provided, e.g. if not started by systemd,
+/// including on non-Linux platforms.
 #[cfg_attr(not(target_os = "linux"), inline)]
 pub fn get() -> Result<Vec<(Option<String>, OwnedFd)>, Error> {
     #[cfg(target_os = "linux")]
@@ -41,6 +46,8 @@ pub fn get() -> Result<Vec<(Option<String>, OwnedFd)>, Error> {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum Error {
+    /// The environment contained non-empty, malformed socket activation variables (`LISTEN_PID`
+    /// and/or `LISTEN_FDS`)
     MalformedEnv,
 }
 
@@ -48,5 +55,6 @@ impl std::error::Error for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad("malformed socket activation environment")
     }
 }
