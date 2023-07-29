@@ -4,8 +4,8 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
 
-Exposes file descriptors passed in by the systemd, the Linux init
-daemon, without dependencies, foreign or otherwise. Enables easy
+Exposes file descriptors passed in by systemd, the Linux init daemon,
+without dependencies, foreign or otherwise. Enables easy
 implementation of socket-activated services in pure Rust.
 
 Unlike services that open sockets themselves, socket-activated
