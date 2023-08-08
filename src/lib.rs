@@ -1,4 +1,4 @@
-use std::{env, fmt, mem, os::fd::OwnedFd};
+use std::{env, fmt, mem};
 
 /// Fetch any sockets provided by systemd, and their names if specified
 ///
@@ -31,7 +31,11 @@ pub fn get() -> Result<Vec<(Option<String>, OwnedFd)>, Error> {
                 false => names.next().map(str::to_owned),
                 true => None,
             };
-            let fd = unsafe { mem::transmute::<u32, OwnedFd>(SD_LISTEN_FDS_START + i) };
+            let fd = OwnedFd {
+                inner: unsafe {
+                    mem::transmute::<u32, std::os::fd::OwnedFd>(SD_LISTEN_FDS_START + i)
+                },
+            };
             result.push((name, fd));
         }
 
@@ -42,6 +46,84 @@ pub fn get() -> Result<Vec<(Option<String>, OwnedFd)>, Error> {
         Ok(Vec::new())
     }
 }
+
+/// An owned Unix file descriptor
+///
+/// Similar to `std::os::fd::OwnedFd`, but defined on all platforms. Uninhabited on non-Unix
+/// targets.
+#[repr(transparent)]
+pub struct OwnedFd {
+    #[cfg(unix)]
+    inner: std::os::fd::OwnedFd,
+    #[cfg(not(unix))]
+    inner: Empty,
+}
+
+impl OwnedFd {
+    /// Release ownership of the underlying file descriptor
+    #[inline]
+    pub fn into_raw(self) -> u32 {
+        #[cfg(unix)]
+        unsafe {
+            mem::transmute(self.inner)
+        }
+        #[cfg(not(unix))]
+        {
+            match self.inner {}
+        }
+    }
+
+    /// Convert to std type. Only available on Unix targets. Prefer using the provided `From`
+    /// implementations to avoid requiring `cfg` gates.
+    #[inline]
+    #[cfg(unix)]
+    pub fn into_std(self) -> std::os::fd::OwnedFd {
+        #[cfg(unix)]
+        {
+            self.inner
+        }
+        #[cfg(not(unix))]
+        {
+            match self.inner {}
+        }
+    }
+}
+
+#[cfg(not(unix))]
+enum Empty {}
+
+macro_rules! from {
+    ($($(#[$meta:meta])? $path:path),* $(,)?) => {
+        $(
+            $(#[$meta])?
+            impl From<OwnedFd> for $path {
+                #[inline]
+                fn from(x: OwnedFd) -> Self {
+                    #[cfg(unix)]
+                    {
+                        Self::from(x.inner)
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        match x.inner {}
+                    }
+                }
+            }
+        )*
+    }
+}
+
+from!(
+    std::net::TcpListener,
+    std::net::TcpStream,
+    std::net::UdpSocket,
+    #[cfg(unix)]
+    std::os::unix::net::UnixListener,
+    #[cfg(unix)]
+    std::os::unix::net::UnixDatagram,
+    #[cfg(unix)]
+    std::os::unix::net::UnixStream,
+);
 
 #[non_exhaustive]
 #[derive(Debug, Clone)]
