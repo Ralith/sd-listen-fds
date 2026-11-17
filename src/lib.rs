@@ -1,14 +1,14 @@
 use std::{env, fmt, mem};
 
-/// Fetch any sockets provided by systemd, and their names if specified
+/// Fetch any sockets provided via systemd's listen fd protocol, and their names if specified
 ///
 /// See [sd_listen_fds](https://www.freedesktop.org/software/systemd/man/sd_listen_fds.html).
 ///
-/// Succeeds with an empty `Vec` if no socket was provided, e.g. if not started by systemd,
-/// including on non-Linux platforms.
-#[cfg_attr(not(target_os = "linux"), inline)]
+/// Succeeds with an empty `Vec` if no socket was provided, e.g. if not started through that
+/// protocol, including on non-Unix platforms.
+#[cfg_attr(not(unix), inline)]
 pub fn get() -> Result<Vec<(Option<String>, OwnedFd)>, Error> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         let Ok(pid) = env::var("LISTEN_PID") else { return Ok(Vec::new()); };
         let pid = pid.parse::<u32>().map_err(|_| Error::MalformedEnv)?;
@@ -41,7 +41,7 @@ pub fn get() -> Result<Vec<(Option<String>, OwnedFd)>, Error> {
 
         Ok(result)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         Ok(Vec::new())
     }
