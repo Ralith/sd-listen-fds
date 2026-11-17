@@ -6,7 +6,7 @@ fn main() {
         .into_iter()
         .next()
         .expect("must be launched as a systemd socket-activated service");
-    let socket = TcpListener::from(fd);
+    let socket = TcpListener::from(fd.try_clone_to_owned().unwrap());
 
     loop {
         let (stream, addr) = socket.accept().unwrap();
