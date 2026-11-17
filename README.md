@@ -28,7 +28,7 @@ let (_name, fd) = fds
     .into_iter()
     .next()
     .expect("must be launched as a systemd socket-activated service");
-let socket = TcpListener::from(fd);
+let socket = TcpListener::from(fd.try_clone_to_owned().unwrap());
 ```
 
 my-service.socket (see also [systemd.socket](https://www.freedesktop.org/software/systemd/man/systemd.socket.html))
