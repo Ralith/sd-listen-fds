@@ -1,14 +1,18 @@
-use std::{env, fmt, mem};
+use std::{env, fmt, io, mem};
 
-/// Fetch any sockets provided by systemd, and their names if specified
+/// Fetch any sockets provided via systemd's listen fd protocol, and their names if specified
 ///
 /// See [sd_listen_fds](https://www.freedesktop.org/software/systemd/man/sd_listen_fds.html).
 ///
-/// Succeeds with an empty `Vec` if no socket was provided, e.g. if not started by systemd,
-/// including on non-Linux platforms.
-#[cfg_attr(not(target_os = "linux"), inline)]
-pub fn get() -> Result<Vec<(Option<String>, OwnedFd)>, Error> {
-    #[cfg(target_os = "linux")]
+/// Succeeds with an empty `Vec` if no socket was provided, e.g. if not started through that
+/// protocol, including on non-Unix platforms.
+///
+/// The file descriptors are borrowed and stay open, so this may be called any number of times. Use
+/// [`BorrowedFd::try_clone_to_owned`] to obtain an owned duplicate of one, or [`take`] to take
+/// ownership of the originals.
+#[cfg_attr(not(unix), inline)]
+pub fn get() -> Result<Vec<(Option<String>, BorrowedFd<'static>)>, Error> {
+    #[cfg(unix)]
     {
         let Ok(pid) = env::var("LISTEN_PID") else { return Ok(Vec::new()); };
         let pid = pid.parse::<u32>().map_err(|_| Error::MalformedEnv)?;
@@ -31,17 +35,52 @@ pub fn get() -> Result<Vec<(Option<String>, OwnedFd)>, Error> {
                 false => names.next().map(str::to_owned),
                 true => None,
             };
-            let fd = OwnedFd {
-                inner: unsafe {
-                    mem::transmute::<u32, std::os::fd::OwnedFd>(SD_LISTEN_FDS_START + i)
-                },
+            let fd = (SD_LISTEN_FDS_START + i) as std::os::fd::RawFd;
+            let fd = BorrowedFd {
+                // Sound if the environment is truthful, because safe code cannot close these file
+                // descriptors: `take` is unsafe, and its contract covers the handles returned here
+                inner: unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) },
             };
             result.push((name, fd));
         }
 
         Ok(result)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+/// Take ownership of any sockets provided via systemd's listen fd protocol, and their names if
+/// specified
+///
+/// Like [`get`], except that the returned handles own the file descriptors and close them when
+/// dropped.
+///
+/// # Safety
+///
+/// The file descriptors that the environment announces must be open and owned by nothing else in
+/// the process, which this function does not check. The returned handles must be the only owners
+/// of the file descriptors, so this must be called at most once. Once this has been called, a
+/// [`BorrowedFd`] returned by [`get`] must not be used, whether it was obtained before or
+/// afterwards.
+#[cfg_attr(not(unix), inline)]
+pub unsafe fn take() -> Result<Vec<(Option<String>, OwnedFd)>, Error> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::{AsRawFd, FromRawFd};
+
+        let fds = get()?.into_iter().map(|(name, fd)| {
+            let fd = OwnedFd {
+                // The caller guarantees that these become the only owners
+                inner: unsafe { std::os::fd::OwnedFd::from_raw_fd(fd.inner.as_raw_fd()) },
+            };
+            (name, fd)
+        });
+        Ok(fds.collect())
+    }
+    #[cfg(not(unix))]
     {
         Ok(Vec::new())
     }
@@ -89,7 +128,49 @@ impl OwnedFd {
     }
 }
 
+/// A borrowed Unix file descriptor
+///
+/// Similar to `std::os::fd::BorrowedFd`, but defined on all platforms. Uninhabited on non-Unix
+/// targets.
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct BorrowedFd<'fd> {
+    #[cfg(unix)]
+    inner: std::os::fd::BorrowedFd<'fd>,
+    #[cfg(not(unix))]
+    inner: Empty,
+    #[cfg(not(unix))]
+    _lifetime: std::marker::PhantomData<&'fd ()>,
+}
+
+impl<'fd> BorrowedFd<'fd> {
+    /// Duplicate the underlying file descriptor
+    ///
+    /// The duplicate is owned, and closing it leaves the borrowed file descriptor open. See
+    /// `std::os::fd::BorrowedFd::try_clone_to_owned`.
+    #[inline]
+    pub fn try_clone_to_owned(&self) -> io::Result<OwnedFd> {
+        #[cfg(unix)]
+        {
+            let inner = self.inner.try_clone_to_owned()?;
+            Ok(OwnedFd { inner })
+        }
+        #[cfg(not(unix))]
+        {
+            match self.inner {}
+        }
+    }
+
+    /// Convert to std type. Only available on Unix targets.
+    #[inline]
+    #[cfg(unix)]
+    pub fn into_std(self) -> std::os::fd::BorrowedFd<'fd> {
+        self.inner
+    }
+}
+
 #[cfg(not(unix))]
+#[derive(Clone, Copy)]
 enum Empty {}
 
 macro_rules! from {
